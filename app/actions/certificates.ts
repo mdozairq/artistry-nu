@@ -8,6 +8,8 @@ import { pdf, Document, } from '@react-pdf/renderer'
 import { FieldValue } from "firebase-admin/firestore";
 import React from 'react'
 import { getStorage } from "firebase-admin/storage"
+import { sendCertificateEmail } from "./email-service"
+import { CertificateResult } from "@/types/types"
 
 // Helper to fetch related documents
 async function enrichCertificate(cert: any) {
@@ -213,6 +215,8 @@ export async function generateCertificatesForTournament(tournamentId: string) {
     let generatedCount = 0;
     let existingCount = 0;
     let failedCount = 0;
+    let emailSentCount = 0;
+    let emailFailedCount = 0;
 
     for (const doc of submissionsSnap.docs) {
       const submission = doc.data();
@@ -282,12 +286,39 @@ export async function generateCertificatesForTournament(tournamentId: string) {
         });
 
         generatedCount++;
-        results.push({
+        const result: CertificateResult = {
           submissionId: doc.id,
-          status: "created",
+          status: 'created',
           certificateUrl: url,
           certificateId: certRef.id,
-        });
+        };
+         // Send email
+         try {
+          const userDoc = await db.collection('users').doc(submission.user_id).get();
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            const userEmail = userData?.email;
+            
+            if (userEmail) {
+              const emailSent = await sendCertificateEmail({
+                to: userEmail,
+                userName: submission.applicant_name || 'Participant',
+                tournamentTitle: tournament?.title || 'Tournament',
+                certificateId: certRef.id,
+              });
+
+              result.emailSent = emailSent;
+              emailSentCount += emailSent ? 1 : 0;
+              emailFailedCount += emailSent ? 0 : 1;
+            }
+          }
+        } catch (err: any) {
+          console.error(`Error sending email for submission ${doc.id}:`, err);
+          result.emailSent = false;
+          result.emailError = err?.message;
+          emailFailedCount++;
+        }
+        results.push(result);
       } catch (error) {
         console.error(`Error generating certificate for submission ${doc.id}:`, error);
         failedCount++;
